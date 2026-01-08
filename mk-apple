@@ -1,0 +1,184 @@
+#!/bin/zsh
+
+set -e
+
+case $0 in
+/*)     D=`dirname $0`;;
+*/*)    D=$PWD/`dirname $0`;;
+*)      D=$PWD;;
+esac
+
+BUILD="$D/build"
+mkdir -p "$BUILD"
+
+# clone openssl repo
+
+cd "$D"
+rm -rf openssl-repo 2>/dev/null || true
+git clone https://github.com/openssl/openssl.git openssl-repo
+cd openssl-repo
+git checkout openssl-3.5.4
+#git checkout OpenSSL_1_1_1w
+
+# compile openssl
+
+function build_openssl() {
+  BUILD_TARGET="$1"
+  INSTALL_DIR="$2"
+
+  echo "\n*** Building OpenSSL for $BUILD_TARGET...\n"
+
+  rm -rf "$INSTALL_DIR" 2>/dev/null || true
+  cd "$D/openssl-repo"
+  ./Configure $BUILD_TARGET --openssldir="/install" --prefix="/install" \
+    no-shared no-dso no-engine no-tests no-docs no-apps no-async \
+    no-aria no-blake2 no-camellia no-cast no-chacha no-des no-idea no-legacy
+  make clean
+  make install DESTDIR="$INSTALL_DIR"
+
+  mkdir -p "$INSTALL_DIR/lib"
+  mkdir -p "$INSTALL_DIR/include"
+  cp "$INSTALL_DIR/install/lib/"*.a "$INSTALL_DIR/lib/"
+  cp -r "$INSTALL_DIR/install/include/"* "$INSTALL_DIR/include/"
+}
+
+build_openssl darwin64-arm64-cc "$BUILD/openssl-macos-arm64"
+build_openssl darwin64-x86_64-cc "$BUILD/openssl-macos-x86_64"
+build_openssl ios64-xcrun "$BUILD/openssl-ios-arm64"
+build_openssl iossimulator-arm64-xcrun "$BUILD/openssl-iossimulator-arm64"
+build_openssl iossimulator-x86_64-xcrun "$BUILD/openssl-iossimulator-x86_64"
+
+# clone srt repo
+
+cd "$D"
+rm -rf srt-repo 2>/dev/null || true
+git clone https://github.com/Haivision/srt.git srt-repo
+cd srt-repo
+git checkout v1.5.4
+
+# apply patches
+
+cd "$D/srt-repo"
+patch -p1 < ../patches/01-cmake.patch
+
+# compile
+
+function merge_libs() {
+  output="$1"
+  shift
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+
+  for lib in "$@"; do
+    cp "$lib" "$tmpdir/in.a"
+    (cd "$tmpdir"; xcrun ar x in.a; rm in.a)
+  done
+
+  rm "$tmpdir/__.SYMDEF"*
+  xcrun ar rcs "$output" "$tmpdir/"*
+}
+
+function build_srt() {
+  PLATFORM="$1"
+  ARCH="$2"
+
+  echo "\n*** Building SRT for $PLATFORM-$ARCH...\n"
+
+  cd "$D/srt-repo"
+  rm CMakeCache.txt 2>/dev/null || true
+
+  case $PLATFORM in
+    ios)
+      # cmake .. -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES="arm64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+      # --ios-min-version=13.0 --apple-min-version=13.0
+      # --ios-disable-bitcode=1 --ios-platform=SIMULATOR64
+      # --enable-encryption=OFF --apple-arch=$ARCH --apple-platform=SIMULATOR64
+      ./configure --enable-debug=OFF --enable-shared=OFF --enable-apps=OFF \
+        --cmake-toolchain-file=./scripts/iOS.cmake --ios-arch=$ARCH --ios-platform=OS \
+	      --openssl-use-static-libs=ON --use-openssl-pc=OFF \
+        --openssl-include-dir="$BUILD/openssl-$PLATFORM-$ARCH/include" \
+      	--openssl-crypto-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libcrypto.a" \
+	      --openssl-ssl-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libssl.a"
+      ;;
+    iossimulator)
+      ./configure --enable-debug=OFF --enable-shared=OFF --enable-apps=OFF \
+        --cmake-toolchain-file=./scripts/iOS.cmake --ios-arch=$ARCH --ios-platform=SIMULATOR \
+	      --openssl-use-static-libs=ON --use-openssl-pc=OFF \
+        --openssl-include-dir="$BUILD/openssl-$PLATFORM-$ARCH/include" \
+      	--openssl-crypto-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libcrypto.a" \
+	      --openssl-ssl-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libssl.a"
+      ;;
+    macos)
+      ./configure --enable-shared=OFF --enable-apps=OFF \
+        --cmake-osx-architectures="$ARCH" \
+	      --openssl-use-static-libs=ON --use-openssl-pc=OFF \
+	      --openssl-include-dir="$BUILD/openssl-$PLATFORM-$ARCH/include" \
+      	--openssl-crypto-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libcrypto.a" \
+	      --openssl-ssl-library="$BUILD/openssl-$PLATFORM-$ARCH/lib/libssl.a"
+      ;;
+  esac
+
+  make clean
+  make
+  rm -rf "$BUILD/srt-$PLATFORM-$ARCH" 2>/dev/null || true
+  mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/lib"
+  mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/include/srt"
+  cp "$D"/srt-repo/libsrt.a "$BUILD/srt-$PLATFORM-$ARCH/lib"
+
+  INC="$BUILD/srt-$PLATFORM-$ARCH/include/srt"
+  cp "$D"/srt-repo/version.h "$INC"
+  cp "$D/srt-repo/srtcore/srt.h" "$INC"
+  cp "$D/srt-repo/srtcore/logging_api.h" "$INC"
+  cp "$D/srt-repo/srtcore/access_control.h" "$INC"
+  cp "$D/srt-repo/srtcore/platform_sys.h" "$INC"
+  cp "$D/srt-repo/srtcore/udt.h" "$INC"
+
+  mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Headers"
+  mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Modules"
+  merge_libs "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/srt" "$BUILD/srt-$PLATFORM-$ARCH/lib"/*.a "$BUILD/openssl-$PLATFORM-$ARCH/lib"/*.a
+  cp -r "$BUILD/srt-$PLATFORM-$ARCH/include"/srt "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Headers"
+
+  MOD_MAP="$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Modules/module.modulemap"
+  echo "module srt {" > "$MOD_MAP"
+  echo "    umbrella \".\"" >> "$MOD_MAP"
+  echo "    export *" >> "$MOD_MAP"
+  echo "}" >> "$MOD_MAP"
+}
+
+build_srt macos x86_64
+build_srt macos arm64
+build_srt ios arm64
+build_srt iossimulator x86_64
+build_srt iossimulator arm64
+
+# create the xcframework
+
+cd "$D/build"
+
+function merge_frameworks() {
+  OUTPUT="$1"
+  shift
+  rm -rf "$OUTPUT" 2>/dev/null || true
+  mkdir -p "$OUTPUT"
+  cp -r "$1/Headers" "$OUTPUT"
+  cp -r "$1/Modules" "$OUTPUT"
+  NAME=$(basename "$OUTPUT" .framework)
+  LIB_PATHS=()
+  for ARG in "$@"; do
+    LIB_PATHS+=("$ARG/$NAME")
+    diff -qr "$OUTPUT/Headers" "$ARG/Headers"
+    diff -qr "$OUTPUT/Modules" "$ARG/Modules"
+  done
+  lipo -create "${LIB_PATHS[@]}" -output "$OUTPUT/$NAME"
+}
+
+merge_frameworks srt-macos/srt.framework srt-macos-*/srt.framework
+merge_frameworks srt-ios/srt.framework srt-ios-*/srt.framework
+merge_frameworks srt-iossimulator/srt.framework srt-iossimulator-*/srt.framework
+
+rm -rf srt.xcframework 2>/dev/null || true
+xcodebuild -create-xcframework \
+  -framework srt-macos/srt.framework \
+  -framework srt-ios/srt.framework \
+  -framework srt-iossimulator/srt.framework \
+  -output srt.xcframework
