@@ -1,0 +1,120 @@
+#!/bin/zsh
+
+set -e
+
+case $0 in
+/*)     D=`dirname $0`;;
+*/*)    D=$PWD/`dirname $0`;;
+*)      D=$PWD;;
+esac
+
+BUILD="$D/build"
+mkdir -p "$BUILD"
+
+# verify ANDROID_NDK_HOME is set
+
+if [ ! -d "$ANDROID_NDK_HOME" ]; then
+	echo "Error: ANDROID_NDK_HOME is not set properly."
+	exit
+fi
+
+AR="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+
+# clone srt repo
+
+cd "$D"
+rm -rf srt-repo 2>/dev/null || true
+git clone https://github.com/Haivision/srt.git srt-repo
+cd srt-repo
+git checkout v1.5.4
+
+# apply patches
+
+cd "$D/srt-repo"
+patch -p1 < ../patches/01-cmake.patch
+
+# compile
+
+cd "$D/srt-repo/scripts/build-android"
+./build-android -n "$ANDROID_NDK_HOME"
+
+# build artifact bundle
+
+ARTIFACTBUNDLE_DIR="$BUILD/srt-static-android.artifactbundle"
+rm -rf "$ARTIFACTBUNDLE_DIR" 2>/dev/null || true
+
+function merge_libs() {
+  output="$1"
+  shift
+  tmpdir=$(mktemp -d)
+  trap 'rm -rf "$tmpdir"' EXIT
+
+  for lib in "$@"; do
+    cp "$lib" "$tmpdir/in.a"
+    (cd "$tmpdir"; "$AR" x in.a; rm in.a)
+  done
+
+  rm "$tmpdir/__.SYMDEF"*
+  "$AR" rcs "$output" "$tmpdir/"*
+}
+
+function build_artifact {
+  NDK_ABI=$1
+  ABI=$2
+
+  OUT_DIR="$ARTIFACTBUNDLE_DIR/android/$ABI"
+
+  mkdir -p "$OUT_DIR/include"
+  mkdir -p "$OUT_DIR/lib"
+
+  cp -r "$D/srt-repo/scripts/build-android/$NDK_ABI/include/srt" "$OUT_DIR/include"
+
+  merge_libs "$OUT_DIR/lib/libsrt-combined.a" "$D/srt-repo/scripts/build-android/$NDK_ABI/lib"/*.a
+
+  echo "module srt {" > "$OUT_DIR/include/srt/module.modulemap"
+  echo "    umbrella \".\"" >> "$OUT_DIR/include/srt/module.modulemap"
+  echo "    export *" >> "$OUT_DIR/include/srt/module.modulemap"
+  echo "}" >> "$OUT_DIR/include/srt/module.modulemap"
+}
+
+build_artifact arm64-v8a aarch64
+build_artifact armeabi-v7a armv7
+build_artifact x86_64 x86_64
+
+cat > "$ARTIFACTBUNDLE_DIR/info.json" << EOF
+{
+  "schemaVersion": "1.0",
+  "artifacts": {
+    "srt": {
+      "version": "1.0.0",
+      "type": "staticLibrary",
+      "variants": [
+        {
+          "path": "android/aarch64/lib/libsrt-combined.a",
+          "supportedTriples": ["aarch64-unknown-linux-android"],
+          "staticLibraryMetadata": {
+            "headerPaths": ["android/aarch64/include"],
+            "moduleMapPath": "android/aarch64/include/srt/module.modulemap"
+          }
+        },
+        {
+          "path": "android/armv7/lib/libsrt-combined.a",
+          "supportedTriples": ["armv7-unknown-linux-android"],
+          "staticLibraryMetadata": {
+            "headerPaths": ["android/armv7/include"],
+            "moduleMapPath": "android/armv7/include/srt/module.modulemap"
+          }
+        },
+        {
+          "path": "android/x86_64/lib/libsrt-combined.a",
+          "supportedTriples": ["x86_64-unknown-linux-android"],
+          "staticLibraryMetadata": {
+            "headerPaths": ["android/x86_64/include"],
+            "moduleMapPath": "android/x86_64/include/srt/module.modulemap"
+          }
+        }
+      ]
+    }
+  }
+}
+EOF
