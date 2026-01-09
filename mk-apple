@@ -182,3 +182,10 @@ xcodebuild -create-xcframework \
   -framework srt-ios/srt.framework \
   -framework srt-iossimulator/srt.framework \
   -output srt.xcframework
+
+# create the zip
+
+rm "$BUILD/srt.xcframework.zip" 2>/dev/null || true
+cd "$BUILD"
+zip -r srt.xcframework.zip srt.xcframework
+xcrun swift package compute-checksum srt.xcframework.zip > srt.xcframework.zip.checksum
