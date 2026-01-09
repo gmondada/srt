@@ -1,0 +1,30 @@
+#!/bin/zsh
+
+set -e
+
+case $0 in
+/*)     D=`dirname $0`;;
+*/*)    D=$PWD/`dirname $0`;;
+*)      D=$PWD;;
+esac
+
+APPLE_BUNDLE_CHECKSUM=$(cat "$D/build/srt.xcframework.zip.checksum")
+
+cat > "$D/build/srt.artifactbundleindex" << EOF
+{
+    "schemaVersion": "1.0",
+    "bundles": [
+        {
+            "fileName": "srt.xcframework.zip",
+            "checksum": "$APPLE_BUNDLE_CHECKSUM",
+            "supportedTriples": [
+              "x86_64-apple-macosx",
+              "arm64-apple-macosx",
+              "arm64-apple-ios",
+              "x86_64-apple-ios-simulator",
+              "arm64-apple-ios-simulator"
+            ]
+        }
+    ]
+}
+EOF

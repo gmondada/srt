@@ -1,0 +1,44 @@
+name: Generate Release Index
+
+on:
+  workflow_run:
+    workflows:
+      - Build Apple
+    types:
+      - completed
+
+permissions:
+  contents: write
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install zsh
+        run: sudo apt-get update; sudo apt-get install zsh
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get tag name
+        id: tag
+        run: |
+          echo "tag=${{ github.event.workflow_run.head_branch }}" >> $GITHUB_OUTPUT
+
+      - name: Download release assets
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" --dir build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate index
+        run: |
+          ./mk-index
+
+      - name: Upload index to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          files: build/srt.artifactbundleindex
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
