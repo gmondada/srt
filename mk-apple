@@ -136,7 +136,7 @@ function build_srt() {
   mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Headers"
   mkdir -p "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Modules"
   merge_libs "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/srt" "$BUILD/srt-$PLATFORM-$ARCH/lib"/*.a "$BUILD/openssl-$PLATFORM-$ARCH/lib"/*.a
-  cp -r "$BUILD/srt-$PLATFORM-$ARCH/include"/srt "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Headers"
+  cp -r "$BUILD/srt-$PLATFORM-$ARCH/include/srt/"* "$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Headers"
 
   MOD_MAP="$BUILD/srt-$PLATFORM-$ARCH/srt.framework/Modules/module.modulemap"
   echo "module srt {" > "$MOD_MAP"
